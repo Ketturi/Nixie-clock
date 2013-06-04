@@ -1,11 +1,13 @@
 'Firmware for Ketturi Electronics Nixie clock
-'Version 1.1
+'Version 1.2
 '
 'ATmega16A, 16 MHz external crystal, Low Fuse:0x3E, High Fuse 0xD9
 'RTC: DS1307
 '
 'Henri Keinonen 2012-2013
 'Thanks to vsaar for help :-)
+
+
 
 '********************
 '* Initial settings *
@@ -28,16 +30,18 @@ Declare Sub Rtc_write_hr
 Declare Sub Rtc_write_minsec
 Declare Sub Rtc_write_setting
 
+
 '****** Set i/o ports
  Ddra = &B00000011                                          'Set Port As Input / Output
  Porta = &B11111111                                         'Enable input pull-ups, 1=on
 
  Ddrb = &B00000011
 
- Ddrc = &B00000000
- Portc = &B11111100
+ Ddrc = &B00000100
+ Portc = &B11111000
 
  Ddrd = &B00100100
+
 
 '****** Define variables
 Dim Bcdsec As Byte                                          'BCD Seconds
@@ -52,7 +56,7 @@ Dim Nixhr As Byte                                           'To be written to ho
 Dim Tmp1 As Byte : Dim Tmp2 As Byte                         'For temporal use only
 
 Dim Blinkyglim As Bit                                       'Blinking glim lights
-Dim Blinkhm As Byte                                         'bit 0=1min, 1=10min, 2=1h, 3=10h for nixies,freq: 6= 1Hz, 7= 2Hz
+Dim Blinkhm As Byte                                         'bit 0=1min, 1=10min, 2=1h, 3=10h for nixies,5= Alarm_led,freq: 6= 1Hz, 7= 2Hz
 
 Dim Mainmode As Byte
 Dim Countr As Byte
@@ -65,7 +69,7 @@ Dim Almhr As Byte : Almhr = 1                               'Alarm hours in deci
 Dim Almon As Byte : Almon = 0                               'Alarm enabled
 Dim Almon2 As Byte                                          'Alarm tune test
 Dim Snzlen As Byte : Snzlen = 5                             'Snooze length
-
+Dim Countasb As Byte : Countasb = 0                         'Astop button timeout counter (show time when dspoff)
 Dim Selpos As Byte : Selpos = 1
 
 'For nixie roll)
@@ -92,6 +96,8 @@ Dim Swpb As Byte                                            'Pushbuttons status 
 Dim Swpb2 As Byte                                           'Pushbuttons status (previous)
 Dim Swbut As Byte                                           'Pressed button
 
+
+
 '****** Play some alias
 Sw_snooze Alias Pinc.6                                      'Sw on when 1
 Sw_alarm Alias Pinc.7                                       'Sw on when 0 for all but snooze
@@ -110,6 +116,9 @@ Alarm_set_rty Alias Pina.5
 Setup_rty Alias Pina.4
 
 Buzzer Alias Tccr1a.com1a1                                  'PWM controlled buzzer
+
+
+Testpin Alias Porta.0
 
 '****** I2C IC addresses
 Const Rtcw = &HD0                                           'RTC write address
@@ -134,6 +143,8 @@ Tccr1a = Bits(wgm11)
 Tccr1b = Bits(wgm12 , Wgm13 , Cs10)
 Call Almtune_restore
 '*******************************************************************************
+
+
 
 '*******************
 '* Boot & Selftest *
@@ -207,12 +218,14 @@ Waitms 300
 
 '*******************************************************************************
 
+
+
 '*********************
 '* Main program loop *
 '*********************
 '*******************************************************************************
 Do
-
+Set Testpin
 'Executed regardless of Mainmode
 Incr Countr
 
@@ -220,6 +233,7 @@ Call Rtc_read
 If Decsec2 <> Decsec Then                                   'if seconds changed
  Decsec2 = Decsec
  Countr = 0
+ If Countasb > 0 Then Decr Countasb
  Call Nixie_write
 End If
 
@@ -231,11 +245,13 @@ If Countr < 122 Then Reset Blinkhm.6 Else Set Blinkhm.6     '1Hz strobe for glim
 
 Call Switch_read
 
+
 If Rolph > 0 Then                                           'increase Countrol2 if rolling is active
  Incr Countrol2
   If Mainmode <> 1 Then Rolph = 0
   If Countrol2 = 12 Then Call Nixie_roll
 End If
+
 
 If Decmin2 <> Decmin Then                                   'If minutes has been changed...
  Decmin2 = Decmin                                           'update Decmin2
@@ -254,7 +270,8 @@ If Decmin2 <> Decmin Then                                   'If minutes has been
  End If
 End If
 
-If Almon = 1 And Sw_alarm = 1 Then                          'stop alarm if Alm turned off (0=on)
+
+If Almon > 0 And Sw_alarm = 1 Then                          'stop alarm if Alm turned off (0=on)
  Almon = 0
  Reset Buzzer
 End If
@@ -270,31 +287,29 @@ If Mainmode <> 3 And Almon2 = 1 Then                        'Resets tune test if
  Almon2 = 0 : Reset Buzzer
 End If
 
+
 'Mainmode 0 = dsp off, 1 = time, 2 = alm set, 3 = setup
 
 '*****                      *****
 '*  Mainmode 0 a.k.a Display off*
 '*****                      *****
 If Mainmode = 0 Then
- Reset Hv_power
-
- If Sw_snooze = 1 Then                                      'If snooze is pressed when display
-   Nixhr = Bcdhr : Nixmin = Bcdmin                          'is off, then show time for 5s
-   Call Nixie_write
-   Set Upper_glim : Set Lower_glim
-   Set Hv_power
-   Waitms 5000
-  Else
-   Reset Hv_power
+ If Sw_snooze = 1 Or Almon = 1 Then
+  Countasb = 5
+  Set Hv_power
+  Set Alarm_led
  End If
-Else
- Set Hv_power
+
+ If Countasb = 0 Then
+   Reset Hv_power
+   Reset Alarm_led
+ End If
 End If
 
 '*****                              *****
 '*  Mainmode 1 a.k.a Normal time display*
 '*****                              *****
-If Mainmode = 1 Then
+If Mainmode = 0 Or Mainmode = 1 Then
  Reset Blinkhm.0 : Reset Blinkhm.1
  Reset Blinkhm.2 : Reset Blinkhm.3
 
@@ -306,13 +321,22 @@ If Mainmode = 1 Then
   End If
  End If
 
+ If Mainmode <> 0 Then Set Alarm_led
+ If Almon > 0 Then
+  If Blinkhm.6 = 0 Then
+   Set Alarm_led
+  Else
+   Reset Alarm_led
+  End If
+ End If
+
  If Swbut.3 = 1 Then
    Countrol = Rollen : Countrol2 = 0 : Countrol3 = 0
    Rolph = Rolphset                                         'activate roll
  End If
 
  Nixhr = Makebcd(dechr) : Nixmin = Makebcd(decmin)          'Read and show time
- If Rolph = 0 Then Call Nixie_write
+ If Rolph = 0 Then Call Nixie_write :
 End If
 
 '*****                         *****
@@ -466,6 +490,8 @@ If Selpos = 5 Then
  End If
 
 End If
+
+Reset Testpin
 Idle                                                        'idle until next interrupt
 Loop
 End                                                         'end of main program loop
@@ -545,6 +571,7 @@ Sub Nixie_write
  I2csend Nmin , Nixmin                                      'Write minutes
 End Sub
 
+
 'Roll nixie numbers (Prevents cathode poisoning)
 Sub Nixie_roll
  Reset Upper_glim : Reset Lower_glim
@@ -563,6 +590,8 @@ Sub Nixie_roll
   Call Nixie_write
 End Sub
 
+
+
 '****Read switches****
 Sub Switch_read
 'Read Mode rotary switch
@@ -578,8 +607,12 @@ Sub Switch_read
   Swdebr = 10                                               'set debounce counter
   Swrs2 = Swrs
   Selpos = 1
-  If Swrs.0 = 0 Then Mainmode = 0                           'dsp off
-  If Swrs.1 = 0 Then Mainmode = 1                           'time
+  If Swrs.0 = 0 Then
+   Mainmode = 0 : Countasb = 0
+  End If                                                    'dsp off
+  If Swrs.1 = 0 Then
+   Mainmode = 1 : Set Hv_power
+  End If                                                    'time
   If Swrs.2 = 0 Then Mainmode = 2                           'alm set
   If Swrs.3 = 0 Then Mainmode = 3                           'setup
  End If
@@ -589,8 +622,7 @@ Sub Switch_read
 'Read pushbuttons
  Swbut = 0                                                  'reset pushbutton output
  If Swdebb = 0 Then                                         'if debouncing not active...
-  Swpb = 0
-  Swpb.0 = Sw_alarm                                         'read Alarm button
+  Swpb = &B00000001
   Swpb.1 = Sw_up                                            'read Up button
   Swpb.2 = Sw_dn                                            'read Down button
   Swpb.3 = Sw_select                                        'read Select button
@@ -620,6 +652,7 @@ Sub Switch_read
  End If
  If Swdebb > 0 Then Decr Swdebb
 End Sub
+
 
 '****Alarm sound**** (Alarm tunes at end)
 Sub Alarm
@@ -664,6 +697,7 @@ Sub Almtune_restore
  End Select
 End Sub
 
+
 '----------------------------------------------------------------------
 '                      Data lines for alarm notes by vsaar
 '----------------------------------------------------------------------
@@ -684,6 +718,7 @@ End Sub
 'A     440      880     1760     3520
 'A#    466      932     1865     3729
 'B/H   494      988     1976     3951
+
 
 Almtune1:                                                   'Basic beep
 Data 2048% , 8% , 0% , 7% , 2048% , 8% , 0% , 7% , 2048% , 8% , 0% , 7%
