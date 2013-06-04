@@ -1,8 +1,11 @@
-'Ketturi Electronics Nixie clock firmware
-'Version 1.
-
-'Controller:ATmega16A, 16 MHz external crystal
+'Firmware for Ketturi Electronics Nixie clock
+'Version 1.1
+'
+'ATmega16A, 16 MHz external crystal, Low Fuse:0x3E, High Fuse 0xD9
 'RTC: DS1307
+'
+'Henri Keinonen 2012-2013
+'Thanks to vsaar for help :-)
 
 '********************
 '* Initial settings *
@@ -25,7 +28,6 @@ Declare Sub Rtc_write_hr
 Declare Sub Rtc_write_minsec
 Declare Sub Rtc_write_setting
 
-
 '****** Set i/o ports
  Ddra = &B00000011                                          'Set Port As Input / Output
  Porta = &B11111111                                         'Enable input pull-ups, 1=on
@@ -37,63 +39,62 @@ Declare Sub Rtc_write_setting
 
  Ddrd = &B00100100
 
-
 '****** Define variables
 Dim Bcdsec As Byte                                          'BCD Seconds
-Dim Bcdmin As Byte
-Dim Bcdhr As Byte                                           'BCD Minutes
-Dim Decsec As Byte , Decsec2 As Byte
-Dim Decmin As Byte , Decmin2 As Byte
+Dim Bcdmin As Byte                                          'BCD Minutes
+Dim Bcdhr As Byte                                           'BCD Hours
+Dim Decsec As Byte , Decsec2 As Byte                        'Decimal seconds & temp minutes
+Dim Decmin As Byte , Decmin2 As Byte                        'Decimal minutes & temp minutes
 Dim Dechr As Byte
-Dim Tmp1 As Byte
-Dim Tmp2 As Byte
-
 Dim Nixmin As Byte                                          'To be written to minutes nixie
 Dim Nixhr As Byte                                           'To be written to hours nixie
 
-Dim Blinkyglim As Bit
-Dim Blinkhm As Byte                                         'bit 0=1min, 1=10min, 2=1h, 3=10h, 6= 1Hz, 7= 2Hz
+Dim Tmp1 As Byte : Dim Tmp2 As Byte                         'For temporal use only
+
+Dim Blinkyglim As Bit                                       'Blinking glim lights
+Dim Blinkhm As Byte                                         'bit 0=1min, 1=10min, 2=1h, 3=10h for nixies,freq: 6= 1Hz, 7= 2Hz
+
 Dim Mainmode As Byte
 Dim Countr As Byte
 
 Dim T1count As Word , Nfreq As Word , Nlen As Integer       'Alarm buzzer things
 Dim T1countd As Dword
-Dim Almtune As Byte : Almtune = 1
+Dim Almtune As Byte : Almtune = 1                           'Selected alarm tune
 Dim Almmin As Byte : Almmin = 0                             'Alarm minutes in decimal format
-Dim Almhr As Byte : Almhr = 1
-Dim Almon As Byte : Almon = 0                               'Alarm hours in decimal format                         'Selected alarm tune
-Dim Almon2 As Byte
-Dim Snzlen As Byte : Snzlen = 5
+Dim Almhr As Byte : Almhr = 1                               'Alarm hours in decimal format
+Dim Almon As Byte : Almon = 0                               'Alarm enabled
+Dim Almon2 As Byte                                          'Alarm tune test
+Dim Snzlen As Byte : Snzlen = 5                             'Snooze length
+
 Dim Selpos As Byte : Selpos = 1
+
+'For nixie roll)
 Dim Rollen As Byte : Rollen = 1                             'Nixie rolling interval, def. 5m
 Dim Countrol As Byte : Countrol = Rollen + 1                'Rolling counter, mins to next roll
 Dim Countrol2 As Byte : Countrol2 = 0                       'Rolling counter, 6/122
 Dim Countrol3 As Byte : Countrol3 = 0                       'Rolling counter, 0-9 numbers
 Dim Rolph As Byte : Rolph = 0                               'Rolling phase, 0=roll not in action
+Dim Roll_order(10) As Byte                                  'Order of nixie numbers
+Roll_order(1) = 1 : Roll_order(2) = 6
+Roll_order(3) = 2 : Roll_order(4) = 7
+Roll_order(5) = 5 : Roll_order(6) = 0
+Roll_order(7) = 4 : Roll_order(8) = 9
+Roll_order(9) = 8 : Roll_order(10) = 3
+Const Rolphset = 2
 
-'buttons
+'Buttons & switches
 Dim Swdebr As Byte : Swdebr = 0                             'Rotary switch debounce counter
 Dim Swdebb As Byte : Swdebb = 0                             'Pushbutton debounce counter
 Dim Swrep As Byte : Swrep = 0                               'Switch repeat counter
 Dim Swrs As Byte                                            'Rotary switches status (new)
 Dim Swrs2 As Byte                                           'Rotary switches status (previous)
 Dim Swpb As Byte                                            'Pushbuttons status (new)
-Dim Swpb2 As Byte
-Dim Swbut As Byte
-
-
-
-
-'****** I2C IC addresses
-Const Rtcw = &HD0                                           'RTC write address
-Const Rtcr = &HD1                                           'RTC read address
-Const Nmin = &H42                                           'Nixie minutes address
-Const Nhr = &H40                                            'Nixie hours address
-Const Rolphset = 2
+Dim Swpb2 As Byte                                           'Pushbuttons status (previous)
+Dim Swbut As Byte                                           'Pressed button
 
 '****** Play some alias
 Sw_snooze Alias Pinc.6                                      'Sw on when 1
-Sw_alarm Alias Pinc.7                                       'Sw on when 0
+Sw_alarm Alias Pinc.7                                       'Sw on when 0 for all but snooze
 Sw_up Alias Pinc.3
 Sw_dn Alias Pinc.5
 Sw_select Alias Pinc.4
@@ -108,9 +109,13 @@ Normal_rty Alias Pina.6
 Alarm_set_rty Alias Pina.5
 Setup_rty Alias Pina.4
 
-Buzzer Alias Tccr1a.com1a1                                  'pwm controlled buzzer
+Buzzer Alias Tccr1a.com1a1                                  'PWM controlled buzzer
 
-                                       'Pushbuttons status (previous)
+'****** I2C IC addresses
+Const Rtcw = &HD0                                           'RTC write address
+Const Rtcr = &HD1                                           'RTC read address
+Const Nmin = &H42                                           'Nixie minutes address
+Const Nhr = &H40                                            'Nixie hours address
 
 '****** Config I2C bus
 Config I2cdelay = 10
@@ -130,27 +135,22 @@ Tccr1b = Bits(wgm12 , Wgm13 , Cs10)
 Call Almtune_restore
 '*******************************************************************************
 
-
-
 '*******************
 '* Boot & Selftest *
 '*******************
 '*******************************************************************************
-Set Hv_power
+Set Hv_power                                                'Enable nixie power supply
 
 '***** Nixie testing
-For Tmp1 = 0 To 9
+For Tmp1 = 0 To 9                                           'Rolls all digits
  Tmp2 = Tmp1 * 16
  Tmp2 = Tmp2 + Tmp1
-
- Nixhr = Tmp2 : Nixmin = Tmp2
+  Nixhr = Tmp2 : Nixmin = Tmp2
  Call Nixie_write
-Waitms 250
+Waitms 150
 Next
-
  Nixhr = &HFF : Nixmin = &HFF
  Call Nixie_write
-
 
 'Read RTC settings byte
 I2cstart
@@ -200,19 +200,20 @@ Else                                                        'If d/t/s not availa
  I2cstop
   Nixhr = &H88 : Nixmin = &H88
   Call Nixie_write
+  Waitms 1500
 End If
 
-Waitms 500
+Waitms 300
 
 '*******************************************************************************
-
-
 
 '*********************
 '* Main program loop *
 '*********************
 '*******************************************************************************
 Do
+
+'Executed regardless of Mainmode
 Incr Countr
 
 Call Rtc_read
@@ -230,13 +231,11 @@ If Countr < 122 Then Reset Blinkhm.6 Else Set Blinkhm.6     '1Hz strobe for glim
 
 Call Switch_read
 
-
 If Rolph > 0 Then                                           'increase Countrol2 if rolling is active
  Incr Countrol2
   If Mainmode <> 1 Then Rolph = 0
-  If Countrol2 = 8 Then Call Nixie_roll
- End If
-
+  If Countrol2 = 12 Then Call Nixie_roll
+End If
 
 If Decmin2 <> Decmin Then                                   'If minutes has been changed...
  Decmin2 = Decmin                                           'update Decmin2
@@ -253,25 +252,25 @@ If Decmin2 <> Decmin Then                                   'If minutes has been
    Rolph = Rolphset                                         'activate roll
   End If
  End If
-
 End If
-
 
 If Almon = 1 And Sw_alarm = 1 Then                          'stop alarm if Alm turned off (0=on)
-  Almon = 0
-  Reset Buzzer
+ Almon = 0
+ Reset Buzzer
 End If
-If Almon = 1 And Swbut.4 = 1 Then                           'stop alarm if snz pressed
-  Almon = Snzlen + 1
-  Reset Buzzer
+
+If Almon = 1 And Swbut.4 = 1 Then                           'stop alarm if snooze pressed
+ Almon = Snzlen + 1
+ Reset Buzzer
 End If
+
 If Almon = 1 Then Call Alarm                                'call for alarm tune
-If Mainmode <> 3 And Almon2 = 1 Then
+
+If Mainmode <> 3 And Almon2 = 1 Then                        'Resets tune test if mode changed
  Almon2 = 0 : Reset Buzzer
 End If
 
 'Mainmode 0 = dsp off, 1 = time, 2 = alm set, 3 = setup
-
 
 '*****                      *****
 '*  Mainmode 0 a.k.a Display off*
@@ -292,7 +291,6 @@ Else
  Set Hv_power
 End If
 
-
 '*****                              *****
 '*  Mainmode 1 a.k.a Normal time display*
 '*****                              *****
@@ -300,20 +298,21 @@ If Mainmode = 1 Then
  Reset Blinkhm.0 : Reset Blinkhm.1
  Reset Blinkhm.2 : Reset Blinkhm.3
 
- If Blinkhm.6 = 0 Then                                      'Blink glims 1Hz
-  Set Upper_glim : Set Lower_glim
- Else
-  Reset Upper_glim : Reset Lower_glim
+ If Rolph = 0 Then
+  If Blinkhm.6 = 0 Then                                     'Blink glims 1Hz
+   Set Upper_glim : Set Lower_glim
+  Else
+   Reset Upper_glim : Reset Lower_glim
+  End If
  End If
 
  If Swbut.3 = 1 Then
-    Countrol = Rollen : Countrol2 = 0 : Countrol3 = 0
+   Countrol = Rollen : Countrol2 = 0 : Countrol3 = 0
    Rolph = Rolphset                                         'activate roll
  End If
 
-
-  Nixhr = Makebcd(dechr) : Nixmin = Makebcd(decmin)         'Read and show time
-  If Rolph = 0 Then Call Nixie_write
+ Nixhr = Makebcd(dechr) : Nixmin = Makebcd(decmin)          'Read and show time
+ If Rolph = 0 Then Call Nixie_write
 End If
 
 '*****                         *****
@@ -330,27 +329,27 @@ If Mainmode = 2 Then
  End If
 
  If Selpos = 1 Then                                         'hours selected
- Set Blinkhm.1 : Reset Blinkhm.0                            'Incr hrs when up pressed
- If Swbut.1 = 1 Then
-  If Almhr = 23 Then Almhr = 0 Else Incr Almhr
-  Call Rtc_write_setting
+  Set Blinkhm.1 : Reset Blinkhm.0                           'Incr hrs when up pressed
+  If Swbut.1 = 1 Then
+   If Almhr = 23 Then Almhr = 0 Else Incr Almhr
+   Call Rtc_write_setting
+  End If
+  If Swbut.2 = 1 Then
+   If Almhr = 0 Then Almhr = 23 Else Decr Almhr             'Decrs hrs when down pressed
+   Call Rtc_write_setting
+  End If
  End If
- If Swbut.2 = 1 Then
-  If Almhr = 0 Then Almhr = 23 Else Decr Almhr              'Decrs hrs when down pressed
-  Call Rtc_write_setting
- End If
-End If
 
-If Selpos = 2 Then                                          'minutes selected
-   Set Blinkhm.0 : Reset Blinkhm.1
+ If Selpos = 2 Then                                         'minutes selected
+  Set Blinkhm.0 : Reset Blinkhm.1
   If Swbut.1 = 1 Then                                       'Incrs mins when up pressed
-     If Almmin = 59 Then Almmin = 0 Else Incr Almmin
+   If Almmin = 59 Then Almmin = 0 Else Incr Almmin
    Call Rtc_write_setting
   End If
   If Swbut.2 = 1 Then                                       'Decrs mins when down pressed
-     If Almmin = 0 Then Almmin = 59 Else Decr Almmin
-    Call Rtc_write_setting
-   End If
+   If Almmin = 0 Then Almmin = 59 Else Decr Almmin
+   Call Rtc_write_setting
+  End If
  End If
 
 End If
@@ -361,15 +360,12 @@ End If
 If Mainmode = 3 Then
 
  If Selpos < 3 Then
- Nixhr = Makebcd(dechr) : Nixmin = Makebcd(decmin)          'Convert and show alarm time
-
+  Nixhr = Makebcd(dechr) : Nixmin = Makebcd(decmin)         'Convert and show alarm time
   Set Upper_glim : Set Lower_glim
  Else
   Nixhr = Selpos - 2                                        'Convert 0x to xF
   Nixhr = Nixhr * 16
   Nixhr = Nixhr + 15
-
-  'setup
   Reset Upper_glim : Reset Lower_glim
  End If
 
@@ -381,19 +377,21 @@ If Mainmode = 3 Then
   If Selpos > 5 Or Selpos = 0 Then Selpos = 1
  End If
 
+'----Set hours
  If Selpos = 1 Then                                         'hours selected
- Set Blinkhm.1 : Reset Blinkhm.0                            'Incr hrs when up pressed
- If Swbut.1 = 1 Then
-  If Dechr = 23 Then Dechr = 0 Else Incr Dechr
-  Call Rtc_write_hr
+  Set Blinkhm.1 : Reset Blinkhm.0                           'Incr hrs when up pressed
+  If Swbut.1 = 1 Then
+   If Dechr = 23 Then Dechr = 0 Else Incr Dechr
+   Call Rtc_write_hr
+  End If
+  If Swbut.2 = 1 Then
+   If Dechr = 0 Then Dechr = 23 Else Decr Dechr             'Decrs hrs when down pressed
+   Call Rtc_write_hr
+  End If
  End If
- If Swbut.2 = 1 Then
-  If Dechr = 0 Then Dechr = 23 Else Decr Dechr              'Decrs hrs when down pressed
-  Call Rtc_write_hr
- End If
-End If
 
-If Selpos = 2 Then                                          'minutes selected
+'----Set Minutes
+ If Selpos = 2 Then                                         'minutes selected
   Set Blinkhm.0 : Reset Blinkhm.1
   If Swbut.1 = 1 Then                                       'Incrs mins when up pressed
    If Decmin = 59 Then Decmin = 0 Else Incr Decmin
@@ -407,7 +405,8 @@ If Selpos = 2 Then                                          'minutes selected
    End If
  End If
 
-If Selpos = 3 Then                                          'set alarm tune
+'----Set alarm tune
+If Selpos = 3 Then
   Set Blinkhm.0 : Reset Blinkhm.1
   If Swbut.1 = 1 Then                                       'Incrs almtune when up pressed
    If Almtune = 6 Then Almtune = 1 Else Incr Almtune
@@ -432,7 +431,8 @@ If Selpos = 3 Then                                          'set alarm tune
   If Almon2 = 1 Then Call Alarm
  End If
 
-If Selpos = 4 Then                                          'set snooze length
+'Set snooze length
+If Selpos = 4 Then                                          '
   Set Blinkhm.0 : Reset Blinkhm.1
   If Swbut.1 = 1 Then                                       'Incrs snzlen when up pressed
    If Snzlen = 15 Then Snzlen = 3 Else Incr Snzlen
@@ -446,10 +446,11 @@ If Selpos = 4 Then                                          'set snooze length
   If Snzlen > 9 Then Nixmin = Makebcd(snzlen)
  End If
 
-If Selpos = 5 Then                                          'set nixie roll interval
+'Set nixie roll interval
+If Selpos = 5 Then
   Set Blinkhm.0 : Reset Blinkhm.1
   If Swbut.1 = 1 Then                                       'Incrs rollen when up pressed
-If Rollen < 10 Then Incr Rollen Else Rollen = Rollen + 5
+   If Rollen < 10 Then Incr Rollen Else Rollen = Rollen + 5
    If Rollen > 60 Then Rollen = 0
    Countrol = Rollen
    Call Rtc_write_setting
@@ -464,56 +465,56 @@ If Rollen < 10 Then Incr Rollen Else Rollen = Rollen + 5
   If Rollen > 9 Then Nixmin = Makebcd(rollen)
  End If
 
-
 End If
-
 Idle                                                        'idle until next interrupt
 Loop
 End                                                         'end of main program loop
 '*******************************************************************************
 
-Sub Rtc_read
+'****************
+'* Sub programs *
+'****************
+'*******************************************************************************
 
-'****Read time and date****
-I2cstart
- I2cwbyte Rtcw                                              'ds1307 write
- I2cwbyte &H00
-I2cstop
-I2cstart
- I2cwbyte Rtcr                                              'ds1307 read
- I2crbyte Bcdsec , Ack
- I2crbyte Bcdmin , Ack
- I2crbyte Bcdhr , Nack
-I2cstop
-Decsec = Makedec(bcdsec)
-Decmin = Makedec(bcdmin)
-Dechr = Makedec(bcdhr)                                      'convert from bcd to dec
+'****Read & Write time,date & settings ****
+'Read time and date
+Sub Rtc_read
+ I2cstart
+  I2cwbyte Rtcw                                             'ds1307 write
+  I2cwbyte &H00
+ I2cstop
+ I2cstart
+  I2cwbyte Rtcr                                             'ds1307 read
+  I2crbyte Bcdsec , Ack
+  I2crbyte Bcdmin , Ack
+  I2crbyte Bcdhr , Nack
+ I2cstop
+ Decsec = Makedec(bcdsec)
+ Decmin = Makedec(bcdmin)
+ Dechr = Makedec(bcdhr)                                     'convert from bcd to dec
 End Sub
 
 'Write hours into RTC
 Sub Rtc_write_hr
-
-Bcdhr = Makebcd(dechr)
-I2cstart
- I2cwbyte Rtcw
- I2cwbyte &H02
+ Bcdhr = Makebcd(dechr)
+ I2cstart
+  I2cwbyte Rtcw
+  I2cwbyte &H02
   I2cwbyte Bcdhr
-I2cstop
-
+ I2cstop
 End Sub
 
 'Write min+sec into RTC
 Sub Rtc_write_minsec
-Bcdsec = Makebcd(decsec)
-Bcdmin = Makebcd(decmin)                                    'convert dec to bcd
+ Bcdsec = Makebcd(decsec)
+ Bcdmin = Makebcd(decmin)                                   'convert dec to bcd
 
-I2cstart
- I2cwbyte Rtcw
- I2cwbyte &H00
-  I2cwbyte Bcdsec
-  I2cwbyte Bcdmin
-I2cstop
-
+ I2cstart
+  I2cwbyte Rtcw
+  I2cwbyte &H00
+   I2cwbyte Bcdsec
+   I2cwbyte Bcdmin
+ I2cstop
 End Sub
 
 'Write settings into RTC
@@ -528,73 +529,105 @@ I2cstart
   I2cwbyte Snzlen                                           '0C Snzlen
   I2cwbyte Rollen                                           '0D Rollen
  I2cstop
-
 End Sub
+
+'***** Nixie functions *****
 
 'Wite to Nixie buffers
 Sub Nixie_write
 
-'Blink nixies
-If Blinkhm.7 = 1 And Swrep < 107 Then
- If Blinkhm.0 = 1 Then Nixmin = &HFF
- If Blinkhm.1 = 1 Then Nixhr = &HFF
-End If
+ If Blinkhm.7 = 1 And Swrep < 107 Then                      'Blink nixies
+  If Blinkhm.0 = 1 Then Nixmin = &HFF
+  If Blinkhm.1 = 1 Then Nixhr = &HFF
+ End If
 
  I2csend Nhr , Nixhr                                        'Write hours
  I2csend Nmin , Nixmin                                      'Write minutes
 End Sub
 
-'----------------- Nixie roll
+'Roll nixie numbers (Prevents cathode poisoning)
 Sub Nixie_roll
+ Reset Upper_glim : Reset Lower_glim
+ Countrol2 = 0
+ Incr Countrol3
+ If Countrol3 = 10 Then
+  Countrol3 = 0 : Decr Rolph
+ End If
 
-Countrol2 = 0
-Incr Countrol3
-If Countrol3 = 10 Then
- Countrol3 = 0 : Decr Rolph
-End If
-
-Tmp1 = Bcdmin Mod 16                                        '1m
-Tmp2 = Bcdmin - Tmp1
-
-                            'Rolph 4-10 (1m)
- Tmp1 = Tmp1 + Countrol3
- If Tmp1 > 9 Then Tmp1 = Tmp1 - 10
- Nixmin = Tmp2 + Tmp1
-
-                            'Rolph 3-9 (10m)
- Tmp2 = Tmp2 / 16
- Tmp2 = Tmp2 + Countrol3
- If Tmp2 > 9 Then Tmp2 = Tmp2 - 10
- Tmp2 = Tmp2 * 16
- Nixmin = Tmp2 + Tmp1
-
-
-Tmp1 = Bcdhr Mod 16
-Tmp2 = Bcdhr - Tmp1
- Tmp1 = Tmp1 + Countrol3
- If Tmp1 > 9 Then Tmp1 = Tmp1 - 10
- Nixhr = Tmp2 + Tmp1
- Tmp2 = Tmp2 / 16
- Tmp2 = Tmp2 + Countrol3
- If Tmp2 > 9 Then Tmp2 = Tmp2 - 10
- Tmp2 = Tmp2 * 16
- Nixhr = Tmp2 + Tmp1
-
-Call Nixie_write
-
+ Tmp2 = Countrol3 + 1
+ If Rolph.0 = 1 Then Tmp2 = 11 - Tmp2                       'if rolph is odd number, invert roll order
+  Tmp1 = Roll_order(tmp2)
+  Nixmin = Tmp1 * 16
+  Nixmin = Nixmin + Tmp1
+  Nixhr = Nixmin
+  Call Nixie_write
 End Sub
 
+'****Read switches****
+Sub Switch_read
+'Read Mode rotary switch
+ If Swdebr = 0 Then                                         'if debounce not going
+  Swrs = 0
+  Swrs.0 = Off_rty
+  Swrs.1 = Normal_rty
+  Swrs.2 = Alarm_set_rty
+  Swrs.3 = Setup_rty
+ End If
 
+ If Swrs <> Swrs2 And Swrs < &B1111 And Swdebr = 0 Then     'if status changed
+  Swdebr = 10                                               'set debounce counter
+  Swrs2 = Swrs
+  Selpos = 1
+  If Swrs.0 = 0 Then Mainmode = 0                           'dsp off
+  If Swrs.1 = 0 Then Mainmode = 1                           'time
+  If Swrs.2 = 0 Then Mainmode = 2                           'alm set
+  If Swrs.3 = 0 Then Mainmode = 3                           'setup
+ End If
 
+ If Swdebr > 0 Then Decr Swdebr
 
+'Read pushbuttons
+ Swbut = 0                                                  'reset pushbutton output
+ If Swdebb = 0 Then                                         'if debouncing not active...
+  Swpb = 0
+  Swpb.0 = Sw_alarm                                         'read Alarm button
+  Swpb.1 = Sw_up                                            'read Up button
+  Swpb.2 = Sw_dn                                            'read Down button
+  Swpb.3 = Sw_select                                        'read Select button
+  Swpb.4 = Sw_snooze                                        'read Snooze button
+  Swpb = 31 - Swpb                                          'invert results to 1=on
+  Toggle Swpb.4
+ End If
+
+ If Swpb <> Swpb2 And Swdebb = 0 Then                       'if status changed and debouncing not active...
+  Swdebb = 5                                                'set debounce counter
+  Swpb2 = Swpb                                              'copy status for comparing next time
+  Swrep = 0                                                 'reset repeat counter
+ End If
+
+ If Swpb > 0 Then Incr Swrep                                'if button pressed, increase repeat counter
+ If Swpb.0 = 1 Or Swpb.3 = 1 Or Swpb.4 = 1 Then             'if Astop or Select pressed...
+  If Swrep = 1 Then Swbut = Swpb                            'if just pressed, copy to output
+  If Swrep > 1 Then Swrep = 2                               'hold repeat counter for these buttons
+ End If
+
+ If Swpb.1 = 1 Or Swpb.2 = 1 Then                           'if Set+ or Set- pressed...
+  If Swrep = 1 Then Swbut = Swpb                            'if just pressed, copy to output
+  If Swrep = 122 Then                                       'if repeat threshold reached...
+   Swbut = Swpb                                             'copy to output
+   Swrep = 107                                              'decrease repeat counter
+  End If
+ End If
+ If Swdebb > 0 Then Decr Swdebb
+End Sub
 
 '****Alarm sound**** (Alarm tunes at end)
 Sub Alarm
-If Nlen = 0 Then
- Reset Buzzer                                               'PWM off
- Read Nfreq
- Read Nlen
- Nlen = Nlen * 2
+ If Nlen = 0 Then
+  Reset Buzzer                                              'PWM off
+  Read Nfreq
+  Read Nlen
+  Nlen = Nlen * 2
   If Nlen = 0 Then                                          'Tune ends
    Call Almtune_restore
    Read Nfreq
@@ -610,18 +643,16 @@ If Nlen = 0 Then
    Icr1l = Low(t1count)
    Compare1a = T1count \ 2                                  '50% duty cycle
    Set Buzzer                                               'PWM on
-
    Decr Nlen
   End If
  Else
   Decr Nlen
-End If
+ End If
 
 End Sub
 
-'****Almtune restore****
+'Almtune restore
 Sub Almtune_restore
-
  Nlen = 0
  Select Case Almtune
   Case 1 : Restore Almtune1
@@ -630,80 +661,8 @@ Sub Almtune_restore
   Case 4 : Restore Almtune4
   Case 5 : Restore Almtune5
   Case 6 : Restore Almtune6
-'  Case 7 : Restore Almtune7
-'  Case 8 : Restore Almtune8
  End Select
-
 End Sub
-
-'****Read switches****
-Sub Switch_read
-
-'--- Read Mode rotary switch
-
-If Swdebr = 0 Then                                          'if debounce not going
- Swrs = 0
- Swrs.0 = Off_rty
- Swrs.1 = Normal_rty
- Swrs.2 = Alarm_set_rty
- Swrs.3 = Setup_rty
-End If
-
-If Swrs <> Swrs2 And Swrs < &B1111 And Swdebr = 0 Then      'if status changed
- Swdebr = 10                                                'set debounce counter
- Swrs2 = Swrs
- Selpos = 1
- If Swrs.0 = 0 Then Mainmode = 0                            'dsp off
- If Swrs.1 = 0 Then Mainmode = 1                            'time
- If Swrs.2 = 0 Then Mainmode = 2                            'alm set
- If Swrs.3 = 0 Then Mainmode = 3                            'setup
-End If
-
-If Swdebr > 0 Then Decr Swdebr
-
-'--- Read pushbuttons
-Swbut = 0                                                   'reset pushbutton output
-If Swdebb = 0 Then                                          'if debouncing not active...
- Swpb = 0
- Swpb.0 = Sw_alarm                                          'read Alarm button
- Swpb.1 = Sw_up                                             'read Up button
- Swpb.2 = Sw_dn                                             'read Down button
- Swpb.3 = Sw_select                                         'read Select button
- Swpb.4 = Sw_snooze                                         'read Snooze button
- Swpb = 31 - Swpb                                           'invert results to 1=on
- Toggle Swpb.4
- Tmp2 = 0
-' For Tmp1 = 0 To 4                                         'check if multiple buttons are pressed
-'  If Swpb.tmp1 = 1 Then Incr Tmp2
-' Next
-' If Tmp2 > 1 Then Swpb = 0                                  'if so, set all buttons to 0
-End If
-
-If Swpb <> Swpb2 And Swdebb = 0 Then                        'if status changed and debouncing not active...
- Swdebb = 5                                                 'set debounce counter
- Swpb2 = Swpb                                               'copy status for comparing next time
- Swrep = 0                                                  'reset repeat counter
-End If
-
-If Swpb > 0 Then Incr Swrep                                 'if button pressed, increase repeat counter
-
-If Swpb.0 = 1 Or Swpb.3 = 1 Or Swpb.4 = 1 Then              'if Astop or Select pressed...
- If Swrep = 1 Then Swbut = Swpb                             'if just pressed, copy to output
- If Swrep > 1 Then Swrep = 2                                'hold repeat counter for these buttons
-End If
-
-If Swpb.1 = 1 Or Swpb.2 = 1 Then                            'if Set+ or Set- pressed...
- If Swrep = 1 Then Swbut = Swpb                             'if just pressed, copy to output
- If Swrep = 122 Then                                        'if repeat threshold reached...
-  Swbut = Swpb                                              'copy to output
-
-  Swrep = 107                                               'decrease repeat counter
- End If
- End If
- If Swdebb > 0 Then Decr Swdebb
-End Sub
-
-
 
 '----------------------------------------------------------------------
 '                      Data lines for alarm notes by vsaar
@@ -725,9 +684,6 @@ End Sub
 'A     440      880     1760     3520
 'A#    466      932     1865     3729
 'B/H   494      988     1976     3951
-
-
-
 
 Almtune1:                                                   'Basic beep
 Data 2048% , 8% , 0% , 7% , 2048% , 8% , 0% , 7% , 2048% , 8% , 0% , 7%
