@@ -1,5 +1,5 @@
 'Firmware for Ketturi Electronics Nixie clock
-'Version 1.2
+'Version 1.3
 '
 'ATmega16A, 16 MHz external crystal, Low Fuse:0x3E, High Fuse 0xD9
 'RTC: DS1307
@@ -209,9 +209,12 @@ Else                                                        'If d/t/s not availa
   I2cwbyte Snzlen                                           '0C Snzlen
   I2cwbyte Rollen                                           '0D Rollen
  I2cstop
+
   Nixhr = &H88 : Nixmin = &H88
   Call Nixie_write
-  Waitms 1500
+  Do
+  Loop Until Sw_snooze = 1
+  'Waitms 1500
 End If
 
 Waitms 300
@@ -287,6 +290,15 @@ If Mainmode <> 3 And Almon2 = 1 Then                        'Resets tune test if
  Almon2 = 0 : Reset Buzzer
 End If
 
+If Mainmode <> 0 And Sw_alarm = 0 Or Countasb > 0 Then Set Alarm_led Else Reset Alarm_led
+
+ If Almon > 0 Then
+  If Blinkhm.6 = 0 Then
+   Set Alarm_led
+  Else
+   Reset Alarm_led
+  End If
+ End If
 
 'Mainmode 0 = dsp off, 1 = time, 2 = alm set, 3 = setup
 
@@ -297,7 +309,9 @@ If Mainmode = 0 Then
  If Sw_snooze = 1 Or Almon = 1 Then
   Countasb = 5
   Set Hv_power
-  Set Alarm_led
+  If Sw_alarm = 0 Then
+      Set Alarm_led
+  End If
  End If
 
  If Countasb = 0 Then
@@ -321,14 +335,7 @@ If Mainmode = 0 Or Mainmode = 1 Then
   End If
  End If
 
- If Mainmode <> 0 Then Set Alarm_led
- If Almon > 0 Then
-  If Blinkhm.6 = 0 Then
-   Set Alarm_led
-  Else
-   Reset Alarm_led
-  End If
- End If
+
 
  If Swbut.3 = 1 Then
    Countrol = Rollen : Countrol2 = 0 : Countrol3 = 0
