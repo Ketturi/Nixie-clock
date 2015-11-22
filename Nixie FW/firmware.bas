@@ -1,5 +1,5 @@
 'Firmware for Ketturi Electronics Nixie clock
-'Version 1.3
+'Version 1.3.1
 '
 'ATmega16A, 16 MHz external crystal, Low Fuse:0x3E, High Fuse 0xD9
 'RTC: DS1307
@@ -117,7 +117,7 @@ Setup_rty Alias Pina.4
 
 Buzzer Alias Tccr1a.com1a1                                  'PWM controlled buzzer
 
-Alarm_output Alias Pinb.7
+Alarm_output Alias Portb.7
 Testpin Alias Porta.0
 
 '****** I2C IC addresses
@@ -300,7 +300,7 @@ If Mainmode <> 0 And Sw_alarm = 0 Or Countasb > 0 Then Set Alarm_led Else Reset 
   End If
  End If
 
- If Almon > 0 Then Set Alarm_output Else Reset Alarm_output  'Set alarm_output if alarm or snooze is on for external alarm device
+If Almon > 0 Then Set Alarm_output Else Reset Alarm_output  'Set alarm_output if alarm or snooze is on for external alarm device
  
 'Mainmode 0 = dsp off, 1 = time, 2 = alm set, 3 = setup
 
