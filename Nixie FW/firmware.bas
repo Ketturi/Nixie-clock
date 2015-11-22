@@ -35,7 +35,7 @@ Declare Sub Rtc_write_setting
  Ddra = &B00000011                                          'Set Port As Input / Output
  Porta = &B11111111                                         'Enable input pull-ups, 1=on
 
- Ddrb = &B00000011
+ Ddrb = &B10000011
 
  Ddrc = &B00000100
  Portc = &B11111000
@@ -117,7 +117,7 @@ Setup_rty Alias Pina.4
 
 Buzzer Alias Tccr1a.com1a1                                  'PWM controlled buzzer
 
-
+Alarm_output Alias Pinb.7
 Testpin Alias Porta.0
 
 '****** I2C IC addresses
@@ -300,6 +300,8 @@ If Mainmode <> 0 And Sw_alarm = 0 Or Countasb > 0 Then Set Alarm_led Else Reset 
   End If
  End If
 
+ If Almon > 0 Then Set Alarm_output Else Reset Alarm_output  'Set alarm_output if alarm or snooze is on for external alarm device
+ 
 'Mainmode 0 = dsp off, 1 = time, 2 = alm set, 3 = setup
 
 '*****                      *****
